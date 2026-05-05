@@ -47,7 +47,7 @@ END ENTITY udp_DualPortRAM_rx;
 --
 ARCHITECTURE striped OF udp_DualPortRAM_rx IS
 type ram_type is array (2**(BUFWIDTH + ADDRWIDTH - 2) - 1 downto 0) of std_logic_vector (7 downto 0);
-signal ram1,ram2, ram3, ram4 : ram_type;
+signal ram1,ram2, ram3, ram4 : ram_type := (others => (others => '0'));
 --attribute block_ram : boolean;
 --attribute block_ram of RAM1 : signal is TRUE;
 --attribute block_ram of RAM2 : signal is TRUE;

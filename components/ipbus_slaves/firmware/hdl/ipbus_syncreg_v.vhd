@@ -23,7 +23,6 @@
 --
 ---------------------------------------------------------------------------------
 
-
 -- ipbus_syncreg_v
 --
 -- Clock-domain crossing control / status register bank
@@ -51,140 +50,156 @@ use work.ipbus.all;
 use work.ipbus_reg_types.all;
 
 entity ipbus_syncreg_v is
-	generic(
-		N_CTRL: natural := 1;
-		N_STAT: natural := 1;
-		SWAP_ORDER: boolean := false;
-		ULTRA_SAFE: boolean := false
-	);
-	port(
-		clk: in std_logic;
-		rst: in std_logic;
-		ipb_in: in ipb_wbus;
-		ipb_out: out ipb_rbus;
-		slv_clk: in std_logic;
-		d: in ipb_reg_v(N_STAT - 1 downto 0) := (others => (others => '0'));
-		q: out ipb_reg_v(N_CTRL - 1 downto 0);
-		qmask: in ipb_reg_v(N_CTRL - 1 downto 0) := (others => (others => '1'));
-		stb: out std_logic_vector(N_CTRL - 1 downto 0);
-		rstb: out std_logic_vector(N_STAT - 1 downto 0)
-	);
-
+    generic(
+        N_CTRL     : natural := 1;
+        N_STAT     : natural := 1;
+        SWAP_ORDER : boolean := false;
+        ULTRA_SAFE : boolean := false
+    );
+    port(
+        clk     : in  std_logic;
+        rst     : in  std_logic;
+        ipb_in  : in  ipb_wbus;
+        ipb_out : out ipb_rbus;
+        slv_clk : in  std_logic;
+        d       : in  ipb_reg_v(N_STAT - 1 downto 0) := (others => (others => '0'));
+        q       : out ipb_reg_v(N_CTRL - 1 downto 0);
+        qmask   : in  ipb_reg_v(N_CTRL - 1 downto 0) := (others => (others => '1'));
+        stb     : out std_logic_vector(N_CTRL - 1 downto 0);
+        rstb    : out std_logic_vector(N_STAT - 1 downto 0)
+    );
 end ipbus_syncreg_v;
 
 architecture rtl of ipbus_syncreg_v is
 
-	constant ADDR_WIDTH: integer := integer_max(calc_width(N_CTRL), calc_width(N_STAT));
+    constant ADDR_WIDTH : integer := integer_max(calc_width(N_CTRL), calc_width(N_STAT));
 
-	signal sel: integer range 0 to 2 ** ADDR_WIDTH - 1 := 0;
-	signal s_cyc, ctrl_cyc_w, ctrl_cyc_r, stat_cyc: std_logic;
-	signal cq: ipb_reg_v(2 ** ADDR_WIDTH - 1 downto 0);
-	signal sq, ds, cd: std_logic_vector(31 downto 0);
-	signal crdy, cack: std_logic_vector(N_CTRL - 1 downto 0);
-	signal sre, srdy, sack, sstb, cstab, sstab: std_logic;
-	signal rdy, ack, rdy_d, pend: std_logic;
+    signal sel, sel_d1                             : integer range 0 to 2 ** ADDR_WIDTH - 1 := 0;
+    signal s_cyc, ctrl_cyc_w, ctrl_cyc_r, stat_cyc : std_logic;
+    signal cq                                      : ipb_reg_v(2 ** ADDR_WIDTH - 1 downto 0);
+    signal sq, ds, cd                              : std_logic_vector(ipb_in.ipb_wdata'range);
+    signal crdy, cack                              : std_logic_vector(N_CTRL - 1 downto 0);
+    signal sre, srdy, sack, sstb, cstab            : std_logic;
+    signal rdy, ack, rdy_d, pend                   : std_logic;
+
+    attribute ASYNC_REG : string;
+
+    -- attribute ASYNC_REG of sel_d1: signal is "yes";
 
 begin
 
--- Address selects
+    -- Address selects
 
-	sel <= to_integer(unsigned(ipb_in.ipb_addr(ADDR_WIDTH - 1 downto 0))) when ADDR_WIDTH > 0 else 0;
-	s_cyc <= '0' when N_STAT = 0 else '1' when N_CTRL = 0 else
-		ipb_in.ipb_addr(ADDR_WIDTH) when not SWAP_ORDER else not ipb_in.ipb_addr(ADDR_WIDTH);
-	stat_cyc <= ipb_in.ipb_strobe and not ipb_in.ipb_write and s_cyc;
-	ctrl_cyc_r <= ipb_in.ipb_strobe and not ipb_in.ipb_write and not s_cyc;
-	ctrl_cyc_w <= ipb_in.ipb_strobe and ipb_in.ipb_write and not s_cyc;
+    sel        <= to_integer(unsigned(ipb_in.ipb_addr(ADDR_WIDTH - 1 downto 0))) when ADDR_WIDTH > 0 else 0;
+    s_cyc      <= '0' when N_STAT = 0 else
+                  '1' when N_CTRL = 0 else
+                  ipb_in.ipb_addr(ADDR_WIDTH) when not SWAP_ORDER else not ipb_in.ipb_addr(ADDR_WIDTH);
+    stat_cyc   <= ipb_in.ipb_strobe and not ipb_in.ipb_write and s_cyc;
+    ctrl_cyc_r <= ipb_in.ipb_strobe and not ipb_in.ipb_write and not s_cyc;
+    ctrl_cyc_w <= ipb_in.ipb_strobe and ipb_in.ipb_write and not s_cyc;
 
--- Avoid race between data and handshake (optimised away if ULTRA_SAFE is false)
+    -- Avoid race between data and handshake (optimised away if ULTRA_SAFE is false)
 
-	cd <= ipb_in.ipb_wdata when rising_edge(clk);
-	cstab <= '1' when cd = ipb_in.ipb_wdata else '0';
+    cd    <= ipb_in.ipb_wdata when rising_edge(clk);
+    cstab <= '1' when cd = ipb_in.ipb_wdata else '0';
 
--- Write registers
+    -- Write registers
 
-	w_gen: for i in N_CTRL - 1 downto 0 generate
+    w_gen : for i in N_CTRL - 1 downto 0 generate
 
-		signal cwe: std_logic;
-		signal ctrl_m: std_logic_vector(31 downto 0);
+        signal cwe    : std_logic;
+        signal ctrl_m : std_logic_vector(ipb_in.ipb_wdata'range);
 
-	begin
+    begin
 
-		cwe <= '1' when ctrl_cyc_w = '1' and sel = i and rdy = '1' and (cstab = '1' or not ULTRA_SAFE) else '0';
-		ctrl_m <= ipb_in.ipb_wdata and qmask(i);
+        cwe    <= '1' when ctrl_cyc_w = '1' and sel = i and rdy = '1' and (cstab = '1' or not ULTRA_SAFE) else '0';
+        ctrl_m <= ipb_in.ipb_wdata and qmask(i);
 
-		wsync: entity work.syncreg_w
-			port map(
-				m_clk => clk,
-				m_rst => rst,
-				m_we => cwe,
-				m_rdy => crdy(i),
-				m_ack => cack(i),
-				m_d => ctrl_m,
-				s_clk => slv_clk,
-				s_q => cq(i),
-				s_stb => stb(i)
-			);
+        wsync : entity work.syncreg_w
+            generic map(
+                SIZE => ipb_in.ipb_wdata'length
+            )
+            port map(
+                m_clk => clk,
+                m_rst => rst,
+                m_we  => cwe,
+                m_rdy => crdy(i),
+                m_ack => cack(i),
+                m_d   => ctrl_m,
+                s_clk => slv_clk,
+                s_q   => cq(i),
+                s_stb => stb(i)
+            );
 
-	end generate;
+    end generate;
 
-	cq(2 ** ADDR_WIDTH - 1 downto N_CTRL) <= (others => (others => '0'));
+    cq(2 ** ADDR_WIDTH - 1 downto N_CTRL) <= (others => (others => '0'));
 
--- Read register
+    -- Read register
 
     -- Generate wrapper prevents simulation errors if component has 0 status registers
-    ds_gen: if (N_STAT > 0) generate
+    ds_gen : if (N_STAT > 0) generate
         ds <= d(sel) when sel < N_STAT else (others => '0');
     end generate;
 
-	sre <= stat_cyc and rdy;
+    sre <= stat_cyc and rdy;
 
-	rsync: entity work.syncreg_r
-		generic map(
-			ULTRA_SAFE => ULTRA_SAFE
-		)
-		port map(
-			m_clk => clk,
-			m_rst => rst,
-			m_re => sre,
-			m_rdy => srdy,
-			m_ack => sack,
-			m_q => sq,
-			s_clk => slv_clk,
-			s_d => ds,
-			s_stb => sstb
-		);
+    rsync : entity work.syncreg_r
+        generic map(
+            SIZE       => ipb_in.ipb_wdata'length,
+            ULTRA_SAFE => ULTRA_SAFE
+        )
+        port map(
+            m_clk => clk,
+            m_rst => rst,
+            m_re  => sre,
+            m_rdy => srdy,
+            m_ack => sack,
+            m_q   => sq,
+            s_clk => slv_clk,
+            s_d   => ds,
+            s_stb => sstb
+        );
 
-	process(sel, sstb)
-	begin
-		rstb <= (others => '0');
-		for i in rstb'range loop
-			if sel = i then
-				rstb(i) <= sstb;
-			else
-				rstb(i) <= '0';
-			end if;
-		end loop;
-	end process;
+    process(sel, sstb)
+    begin
+        rstb <= (others => '0');
+        for i in rstb'range loop
+            if sel = i then
+                rstb(i) <= sstb;
+            else
+                rstb(i) <= '0';
+            end if;
+        end loop;
+    end process;
 
--- Interlock to catch situation where strobe is dropped in middle of write / read cycle
+    -- process(slv_clk)
+    -- begin
+    --     if rising_edge(slv_clk) then
+    --         sel_d1 <= sel;
+    --     end if;
+    -- end process;
 
-	process(clk)
-	begin
-		if rising_edge(clk) then
-			rdy_d <= rdy;
-			pend <= (pend or (not rdy and rdy_d)) and ipb_in.ipb_strobe and not rst and not ack;
-		end if;
-	end process;
 
-	rdy <= and_reduce(crdy) and srdy;
-	ack <= (or_reduce(cack) or sack) and pend;
+    -- Interlock to catch situation where strobe is dropped in middle of write / read cycle
 
--- ipbus interface
+    process(clk)
+    begin
+        if rising_edge(clk) then
+            rdy_d <= rdy;
+            pend  <= (pend or (not rdy and rdy_d)) and ipb_in.ipb_strobe and not rst and not ack;
+        end if;
+    end process;
 
-	ipb_out.ipb_rdata <= cq(sel) when ctrl_cyc_r = '1' else sq;
-	ipb_out.ipb_ack <= ((ctrl_cyc_w or stat_cyc) and ack) or (ctrl_cyc_r and rdy);
-	ipb_out.ipb_err <= '0';
+    rdy <= and_reduce(crdy) and srdy;
+    ack <= (or_reduce(cack) or sack) and pend;
 
-	q <= cq(N_CTRL - 1 downto 0);
+    -- ipbus interface
+
+    ipb_out.ipb_rdata <= cq(sel) when ctrl_cyc_r = '1' else sq;
+    ipb_out.ipb_ack   <= ((ctrl_cyc_w or stat_cyc) and ack) or (ctrl_cyc_r and rdy);
+    ipb_out.ipb_err   <= '0';
+
+    q <= cq(N_CTRL - 1 downto 0);
 
 end rtl;

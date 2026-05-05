@@ -65,37 +65,40 @@ entity clocks_us_serdes is
 end clocks_us_serdes;
 
 architecture rtl of clocks_us_serdes is
-	
+
 	signal dcm_locked, sysclk, clk_ipb_i, clk_ipb_b, clkfb, clk200: std_logic;
 	signal clk_aux_i, clk_aux_b: std_logic;
 	signal d17, d17_d: std_logic;
 	signal nuke_i, nuke_d, nuke_d2, eth_done: std_logic := '0';
 	signal rst, srst, rst_ipb, rst_125, rst_aux, rst_ipb_ctrl: std_logic := '1';
 	signal rctr: unsigned(3 downto 0) := "0000";
-	
+
+    attribute ASYNC_REG : string;
+    attribute ASYNC_REG of nuke_d, nuke_d2 : signal is "TRUE";
+
 begin
-	
+
 	sysclk <= clki_fr;
 
 	bufgipb: BUFG port map(
 		i => clk_ipb_i,
 		o => clk_ipb_b
 	);
-	
+
 	clko_ipb <= clk_ipb_b;
-	
+
 	bufgaux: BUFG port map(
 		i => clk_aux_i,
 		o => clk_aux_b
 	);
-	
+
 	clko_aux <= clk_aux_b;
-	
+
 	bufg200: BUFG port map(
 		i => clk200,
 		o => clko_200
 	);
-	
+
 	mmcm: MMCME3_BASE
 		generic map(
 			clkin1_period => 1000.0 / CLK_FR_FREQ,
@@ -115,14 +118,14 @@ begin
 			rst => '0',
 			pwrdwn => '0'
 		);
-	
+
 	clkdiv: entity work.ipbus_clock_div
 		port map(
 			clk => sysclk,
 			d17 => d17,
 			d28 => onehz
 		);
-	
+
 	process(sysclk)
 	begin
 		if rising_edge(sysclk) then
@@ -136,10 +139,10 @@ begin
 			end if;
 		end if;
 	end process;
-	
+
 	locked <= dcm_locked;
 	srst <= '1' when rctr /= "0000" else '0';
-	
+
 	process(clk_ipb_b)
 	begin
 		if rising_edge(clk_ipb_b) then
@@ -150,36 +153,36 @@ begin
 			end if;
 		end if;
 	end process;
-	
+
 	rsto_ipb <= rst_ipb;
-	
+
 	process(clk_ipb_b)
 	begin
 		if rising_edge(clk_ipb_b) then
 			rst_ipb_ctrl <= rst;
 		end if;
 	end process;
-	
+
 	rsto_ipb_ctrl <= rst_ipb_ctrl;
-	
+
 	process(clki_125)
 	begin
 		if rising_edge(clki_125) then
 			rst_125 <= rst or not eth_done;
 		end if;
 	end process;
-	
+
 	rsto_125 <= rst_125;
-	
+
 	rsto_fr <= rst;
-	
+
 	process(clk_aux_b)
 	begin
 		if rising_edge(clk_aux_b) then
 			rst_aux <= rst;
 		end if;
 	end process;
-	
+
 	rsto_aux <= rst_aux;
-		
+
 end rtl;
